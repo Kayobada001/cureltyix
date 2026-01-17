@@ -32,6 +32,41 @@ interface SymptomAnalysis {
         return this.getFallbackAnalysis(symptoms, description);
       }
     }
+
+    // NEW: Chat method for AI Assistant
+    async chatWithAI(
+      userMessage: string,
+      previousMessages: Array<{role: 'user' | 'assistant', content: string}>
+    ): Promise<string> {
+      try {
+        // Build conversation history
+        const messages = [
+          {
+            role: "system" as const,
+            content: "You are a helpful medical AI assistant. Provide accurate, empathetic health information. Always remind users to consult healthcare professionals for diagnosis and treatment."
+          },
+          ...previousMessages.map(msg => ({
+            role: msg.role as "user" | "assistant",
+            content: msg.content
+          })),
+          {
+            role: "user" as const,
+            content: userMessage
+          }
+        ];
+
+        const chatCompletion = await client.chatCompletion({
+          model: "meta-llama/Llama-3.1-8B-Instruct:sambanova",
+          messages: messages,
+          max_tokens: 500,
+        });
+
+        return chatCompletion.choices[0].message.content || "I apologize, but I couldn't generate a response. Please try again.";
+      } catch (error) {
+        console.error('AI chat failed:', error);
+        return "I'm sorry, I'm having trouble responding right now. Please try again in a moment.";
+      }
+    }
   
     
     private buildPrompt(symptoms: string[], description: string): string {
