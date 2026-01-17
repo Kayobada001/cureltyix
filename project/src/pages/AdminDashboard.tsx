@@ -1,390 +1,363 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase, User, Doctor, Patient, Consultation } from '../lib/supabase';
-import { Button } from '../components/Button';
+import { useRole } from '../contexts/RoleContext';
+import { supabase } from '../lib/supabase';
 import { Logo } from '../components/Logo';
-import { Moon, Sun, LogOut, Users, UserCheck, Activity, Shield } from 'lucide-react';
-import { useTheme } from '../contexts/ThemeContext';
-
-interface DoctorWithUser extends Doctor {
-  user: User;
-}
+import { Bell, Users, Activity, Calendar, TrendingUp, AlertCircle, Clock, CheckCircle } from 'lucide-react';
+import { AdminDropdown } from '../components/AdminDropdown';
+import { SettingsModal } from '../components/SettingsModal';
+import { EditProfileModal } from '../components/EditProfileModal';
+import { NotificationsPanel } from '../components/NotificationsPanel';
+import { UserManagementModal } from '../components/UserManagementModal';
+import { SystemHealthModal } from '../components/SystemHealthModal';
+import toast from 'react-hot-toast';
 
 export function AdminDashboard() {
-  const { user, signOut } = useAuth();
-  const { theme, toggleTheme } = useTheme();
-  const [users, setUsers] = useState<User[]>([]);
-  const [doctors, setDoctors] = useState<DoctorWithUser[]>([]);
-  const [patients, setPatients] = useState<Patient[]>([]);
-  const [consultations, setConsultations] = useState<Consultation[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'users' | 'doctors' | 'statistics'>('statistics');
+  const { user } = useAuth();
+  const { switchRole } = useRole();
+  const [stats, setStats] = useState({
+    totalPatients: 0,
+    totalDoctors: 0,
+    verifiedDoctors: 0,
+    pendingDoctors: 0,
+    totalConsultations: 0,
+    consultationsToday: 0,
+    pendingConsultations: 0,
+    completedConsultations: 0,
+    urgentConsultations: 0,
+    highPriorityConsultations: 0,
+    mediumPriorityConsultations: 0,
+    scheduledAppointments: 0,
+    satisfactionRate: 0
+  });
+  const [recentActivity, setRecentActivity] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [unreadCount] = useState(3);
+
+  // Modal states
+  const [showSettings, setShowSettings] = useState(false);
+  const [showEditProfile, setShowEditProfile] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showUserManagement, setShowUserManagement] = useState(false);
+  const [showSystemHealth, setShowSystemHealth] = useState(false);
 
   useEffect(() => {
-    fetchData();
+    loadDashboardData();
   }, []);
 
-  const fetchData = async () => {
-    const { data: usersData } = await supabase
-      .from('users')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    setUsers(usersData || []);
-
-    const { data: doctorsData } = await supabase
-      .from('doctors')
-      .select(`
-        *,
-        user:users(*)
-      `)
-      .order('created_at', { ascending: false });
-
-    setDoctors(doctorsData as DoctorWithUser[] || []);
-
-    const { data: patientsData } = await supabase
-      .from('patients')
-      .select('*');
-
-    setPatients(patientsData || []);
-
-    const { data: consultationsData } = await supabase
-      .from('consultations')
-      .select('*');
-
-    setConsultations(consultationsData || []);
-  };
-
-  const handleVerifyDoctor = async (doctorId: string, isVerified: boolean) => {
+  const loadDashboardData = async () => {
     setLoading(true);
     try {
-      const { error } = await supabase
+      // Get patients count
+      const { count: patientsCount } = await supabase
+        .from('patients')
+        .select('*', { count: 'exact', head: true });
+
+      // Get doctors stats
+      const { data: doctors } = await supabase
         .from('doctors')
-        .update({ is_verified: isVerified })
-        .eq('id', doctorId);
+        .select('is_verified');
+      
+      const totalDoctors = doctors?.length || 0;
+      const verifiedDoctors = doctors?.filter(d => d.is_verified).length || 0;
+      const pendingDoctors = totalDoctors - verifiedDoctors;
 
-      if (error) throw error;
-      fetchData();
+      // Get consultations stats
+      const { data: consultations } = await supabase
+        .from('consultations')
+        .select('status, priority, created_at');
+
+      const totalConsultations = consultations?.length || 0;
+      const today = new Date().toDateString();
+      const consultationsToday = consultations?.filter(c => 
+        new Date(c.created_at).toDateString() === today
+      ).length || 0;
+
+      const pendingConsultations = consultations?.filter(c => c.status === 'pending').length || 0;
+      const completedConsultations = consultations?.filter(c => c.status === 'completed').length || 0;
+      
+      const urgentConsultations = consultations?.filter(c => c.priority === 'urgent').length || 0;
+      const highPriorityConsultations = consultations?.filter(c => c.priority === 'high').length || 0;
+      const mediumPriorityConsultations = consultations?.filter(c => c.priority === 'medium').length || 0;
+
+      // Get appointments count
+      const { count: scheduledCount } = await supabase
+        .from('appointments')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'scheduled');
+
+      // Get recent consultations for activity
+      const { data: recentConsultations } = await supabase
+        .from('consultations')
+        .select(`
+          *,
+          patient:patients(
+            user:users(full_name)
+          )
+        `)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      setStats({
+        totalPatients: patientsCount || 0,
+        totalDoctors,
+        verifiedDoctors,
+        pendingDoctors,
+        totalConsultations,
+        consultationsToday,
+        pendingConsultations,
+        completedConsultations,
+        urgentConsultations,
+        highPriorityConsultations,
+        mediumPriorityConsultations,
+        scheduledAppointments: scheduledCount || 0,
+        satisfactionRate: 94
+      });
+
+      setRecentActivity(recentConsultations || []);
     } catch (error) {
-      console.error('Error updating doctor verification:', error);
+      console.error('Error loading dashboard data:', error);
+      toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDeleteUser = async (userId: string) => {
-    if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) {
-      return;
+  const handleRoleSwitch = (role: 'admin' | 'doctor' | 'patient') => {
+    switchRole(role);
+    if (role === 'doctor') {
+      toast.success('Switched to Doctor view');
+    } else if (role === 'patient') {
+      toast.success('Switched to Patient view');
+    } else {
+      toast.success('Admin view');
     }
+  };
 
-    setLoading(true);
-    try {
-      const { error } = await supabase.auth.admin.deleteUser(userId);
-      if (error) throw error;
-      fetchData();
-    } catch (error) {
-      console.error('Error deleting user:', error);
-    } finally {
-      setLoading(false);
+  const getPriorityColor = (priority: string) => {
+    switch (priority) {
+      case 'urgent': return 'text-red-400 bg-red-500/10';
+      case 'high': return 'text-orange-400 bg-orange-500/10';
+      case 'medium': return 'text-yellow-400 bg-yellow-500/10';
+      default: return 'text-green-400 bg-green-500/10';
     }
+  };
+
+  const formatTimeAgo = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    return `${days}d ago`;
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
-      <nav className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4">
+    <div className="min-h-screen bg-[#0a0e1a] text-white">
+      {/* Navigation */}
+      <nav className="bg-[#0f1420] border-b border-gray-800 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <Logo size="md" />
+          <div className="flex items-center gap-2">
+            <Logo size="md" />
+            <div className="text-xs text-gray-400 ml-2">AI Healthcare Platform</div>
+          </div>
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Shield className="text-teal-600 dark:text-teal-400" size={20} />
-              <span className="text-sm text-gray-600 dark:text-gray-300">
-                Admin: <span className="font-semibold">{user?.full_name}</span>
-              </span>
-            </div>
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            <button 
+              className="relative p-2 hover:bg-gray-800 rounded-lg transition-colors"
+              onClick={() => setShowNotifications(true)}
             >
-              {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
+              <Bell size={20} className="text-gray-400" />
+              {unreadCount > 0 && (
+                <span className="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded-full text-xs flex items-center justify-center">
+                  {unreadCount}
+                </span>
+              )}
             </button>
-            <Button variant="ghost" size="sm" onClick={signOut}>
-              <LogOut size={18} className="mr-2" />
-              Sign Out
-            </Button>
+            <div className="flex items-center gap-3 pl-4 border-l border-gray-800">
+              <div className="text-right">
+                <div className="text-sm font-medium">Welcome, {user?.full_name?.split(' ')[0] || 'Admin'}</div>
+                <div className="text-xs text-purple-400">Admin</div>
+              </div>
+              <AdminDropdown
+                onViewSettings={() => setShowSettings(true)}
+                onViewProfile={() => setShowEditProfile(true)}
+                onViewUserManagement={() => setShowUserManagement(true)}
+                onViewSystemHealth={() => setShowSystemHealth(true)}
+                onSwitchRole={handleRoleSwitch}
+              />
+            </div>
           </div>
         </div>
       </nav>
 
       <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Header */}
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">Admin Dashboard</h1>
-          <p className="text-gray-600 dark:text-gray-400">Manage users, doctors, and system settings</p>
+          <h1 className="text-3xl font-bold mb-2">Admin Dashboard</h1>
+          <p className="text-gray-400">Overview of all patients and system metrics</p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-                <Users className="text-blue-600 dark:text-blue-400" size={24} />
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <div className="bg-[#0f1420] border border-purple-500/20 rounded-xl p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-purple-500/10 rounded-lg">
+                <Users className="text-purple-400" size={24} />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Total Users</h3>
+              <h3 className="text-gray-400 text-sm">Total Patients</h3>
             </div>
-            <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{users.length}</p>
+            <p className="text-3xl font-bold text-purple-400">{stats.totalPatients}</p>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-teal-100 dark:bg-teal-900/30 rounded-lg">
-                <UserCheck className="text-teal-600 dark:text-teal-400" size={24} />
+          <div className="bg-[#0f1420] border border-blue-500/20 rounded-xl p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-blue-500/10 rounded-lg">
+                <Activity className="text-blue-400" size={24} />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Doctors</h3>
+              <div>
+                <h3 className="text-gray-400 text-sm">Consultations</h3>
+                <p className="text-xs text-gray-500">Today</p>
+              </div>
             </div>
-            <p className="text-3xl font-bold text-teal-600 dark:text-teal-400">{doctors.length}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              {doctors.filter(d => d.is_verified).length} verified
-            </p>
+            <p className="text-3xl font-bold text-blue-400">{stats.consultationsToday}</p>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-                <Users className="text-purple-600 dark:text-purple-400" size={24} />
+          <div className="bg-[#0f1420] border border-teal-500/20 rounded-xl p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-teal-500/10 rounded-lg">
+                <Calendar className="text-teal-400" size={24} />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Patients</h3>
+              <h3 className="text-gray-400 text-sm">Scheduled</h3>
             </div>
-            <p className="text-3xl font-bold text-purple-600 dark:text-purple-400">{patients.length}</p>
+            <p className="text-3xl font-bold text-teal-400">{stats.scheduledAppointments}</p>
           </div>
 
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-            <div className="flex items-center gap-3 mb-2">
-              <div className="p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
-                <Activity className="text-orange-600 dark:text-orange-400" size={24} />
+          <div className="bg-[#0f1420] border border-green-500/20 rounded-xl p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="p-2 bg-green-500/10 rounded-lg">
+                <TrendingUp className="text-green-400" size={24} />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Consultations</h3>
+              <h3 className="text-gray-400 text-sm">Satisfaction</h3>
             </div>
-            <p className="text-3xl font-bold text-orange-600 dark:text-orange-400">{consultations.length}</p>
-          </div>
-        </div>
-
-        <div className="mb-6">
-          <div className="border-b border-gray-200 dark:border-gray-700">
-            <nav className="flex gap-4">
-              <button
-                onClick={() => setActiveTab('statistics')}
-                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
-                  activeTab === 'statistics'
-                    ? 'border-teal-500 text-teal-600 dark:text-teal-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
-              >
-                Statistics
-              </button>
-              <button
-                onClick={() => setActiveTab('users')}
-                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
-                  activeTab === 'users'
-                    ? 'border-teal-500 text-teal-600 dark:text-teal-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
-              >
-                All Users
-              </button>
-              <button
-                onClick={() => setActiveTab('doctors')}
-                className={`px-4 py-3 font-medium text-sm border-b-2 transition-colors ${
-                  activeTab === 'doctors'
-                    ? 'border-teal-500 text-teal-600 dark:text-teal-400'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                }`}
-              >
-                Doctor Management
-              </button>
-            </nav>
+            <p className="text-3xl font-bold text-green-400">{stats.satisfactionRate}%</p>
           </div>
         </div>
 
-        {activeTab === 'statistics' && (
-          <div className="space-y-6">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Consultation Statistics</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Pending</p>
-                  <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-                    {consultations.filter(c => c.status === 'pending').length}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Assigned</p>
-                  <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
-                    {consultations.filter(c => c.status === 'assigned').length}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Completed</p>
-                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                    {consultations.filter(c => c.status === 'completed').length}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Cancelled</p>
-                  <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-                    {consultations.filter(c => c.status === 'cancelled').length}
-                  </p>
+        {/* System Overview */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="lg:col-span-2 bg-[#0f1420] border border-gray-800 rounded-xl p-6">
+            <h2 className="text-xl font-semibold mb-6">System Overview</h2>
+            <div className="grid grid-cols-3 gap-6">
+              {/* Doctors */}
+              <div>
+                <h3 className="text-sm text-gray-400 mb-4">Doctors</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Total</span>
+                    <span className="text-lg font-bold">{stats.totalDoctors}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Verified</span>
+                    <span className="text-lg font-bold text-teal-400">{stats.verifiedDoctors}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Pending</span>
+                    <span className="text-lg font-bold text-yellow-400">{stats.pendingDoctors}</span>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Priority Distribution</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Urgent</p>
-                  <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-                    {consultations.filter(c => c.priority === 'urgent').length}
-                  </p>
+              {/* Consultations */}
+              <div>
+                <h3 className="text-sm text-gray-400 mb-4">Consultations</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Total</span>
+                    <span className="text-lg font-bold">{stats.totalConsultations}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Pending</span>
+                    <span className="text-lg font-bold text-yellow-400">{stats.pendingConsultations}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Completed</span>
+                    <span className="text-lg font-bold text-green-400">{stats.completedConsultations}</span>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">High</p>
-                  <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-                    {consultations.filter(c => c.priority === 'high').length}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Medium</p>
-                  <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">
-                    {consultations.filter(c => c.priority === 'medium').length}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Low</p>
-                  <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                    {consultations.filter(c => c.priority === 'low').length}
-                  </p>
+              </div>
+
+              {/* Priority */}
+              <div>
+                <h3 className="text-sm text-gray-400 mb-4">Priority</h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Urgent</span>
+                    <span className="text-lg font-bold text-red-400">{stats.urgentConsultations}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">High</span>
+                    <span className="text-lg font-bold text-orange-400">{stats.highPriorityConsultations}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-300">Medium</span>
+                    <span className="text-lg font-bold text-yellow-400">{stats.mediumPriorityConsultations}</span>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        )}
 
-        {activeTab === 'users' && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white">All Users</h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 dark:bg-gray-700">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                      Email
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                      Role
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                      Created At
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                  {users.map((user) => (
-                    <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900 dark:text-white">{user.full_name}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-600 dark:text-gray-400">{user.email}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                          user.role === 'admin'
-                            ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300'
-                            : user.role === 'doctor'
-                            ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300'
-                            : 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
-                        }`}>
-                          {user.role}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-400">
-                        {new Date(user.created_at).toLocaleDateString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'doctors' && (
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700">
-            <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Doctor Management</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Verify and manage doctor accounts</p>
-            </div>
-            <div className="divide-y divide-gray-200 dark:divide-gray-700">
-              {doctors.length === 0 ? (
-                <div className="px-6 py-12 text-center">
-                  <UserCheck className="mx-auto text-gray-400 mb-4" size={48} />
-                  <p className="text-gray-600 dark:text-gray-400">No doctors registered yet</p>
-                </div>
-              ) : (
-                doctors.map((doctor) => (
-                  <div key={doctor.id} className="px-6 py-4">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <h3 className="font-semibold text-gray-900 dark:text-white">
-                            Dr. {doctor.user.full_name}
-                          </h3>
-                          {doctor.is_verified ? (
-                            <span className="px-2 py-1 bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 text-xs font-semibold rounded-full">
-                              Verified
-                            </span>
-                          ) : (
-                            <span className="px-2 py-1 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 text-xs font-semibold rounded-full">
-                              Pending
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">{doctor.user.email}</p>
-                        <div className="grid grid-cols-2 gap-4 mt-3">
-                          <div>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">Specialization</p>
-                            <p className="text-sm font-medium text-gray-900 dark:text-white">{doctor.specialization}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-gray-500 dark:text-gray-400">Experience</p>
-                            <p className="text-sm font-medium text-gray-900 dark:text-white">{doctor.years_of_experience} years</p>
-                          </div>
-                        </div>
-                        {doctor.bio && (
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">{doctor.bio}</p>
-                        )}
-                      </div>
-                      <div className="ml-4">
-                        <Button
-                          size="sm"
-                          variant={doctor.is_verified ? 'danger' : 'primary'}
-                          onClick={() => handleVerifyDoctor(doctor.id, !doctor.is_verified)}
-                          isLoading={loading}
-                        >
-                          {doctor.is_verified ? 'Revoke' : 'Verify'}
-                        </Button>
-                      </div>
+          {/* Recent Activity */}
+          <div className="bg-[#0f1420] border border-gray-800 rounded-xl p-6">
+            <h2 className="text-xl font-semibold mb-6">Recent Activity</h2>
+            {loading ? (
+              <div className="text-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-500 mx-auto"></div>
+              </div>
+            ) : recentActivity.length === 0 ? (
+              <p className="text-gray-400 text-sm text-center py-8">No recent activity</p>
+            ) : (
+              <div className="space-y-4">
+                {recentActivity.map((activity) => (
+                  <div key={activity.id} className="flex items-start gap-3 pb-4 border-b border-gray-800 last:border-0">
+                    <div className={`p-1.5 rounded-lg ${getPriorityColor(activity.priority)}`}>
+                      {activity.priority === 'urgent' ? (
+                        <AlertCircle size={16} />
+                      ) : activity.status === 'completed' ? (
+                        <CheckCircle size={16} />
+                      ) : (
+                        <Clock size={16} />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white font-medium truncate">
+                        {activity.patient?.user?.full_name || 'Unknown Patient'}
+                      </p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Consultation • {activity.priority}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {formatTimeAgo(activity.created_at)}
+                      </p>
                     </div>
                   </div>
-                ))
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </main>
+
+      {/* Modals */}
+      {showNotifications && <NotificationsPanel onClose={() => setShowNotifications(false)} />}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showEditProfile && <EditProfileModal onClose={() => setShowEditProfile(false)} />}
+      {showUserManagement && <UserManagementModal onClose={() => setShowUserManagement(false)} />}
+      {showSystemHealth && <SystemHealthModal onClose={() => setShowSystemHealth(false)} />}
     </div>
   );
 }
